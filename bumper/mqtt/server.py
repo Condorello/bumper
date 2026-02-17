@@ -1,12 +1,12 @@
 """Server module."""
 import os
 from typing import Any
-from importlib.metadata import entry_points
 
 import amqtt
 from amqtt.broker import BrokerContext
 from amqtt.mqtt.constants import QOS_0, QOS_1, QOS_2
 from amqtt.session import IncomingApplicationMessage, Session
+from amqtt.plugins.authentication import BaseAuthPlugin  # <-- nuova base
 from passlib.apps import custom_app_context as pwd_context
 
 import bumper
@@ -29,28 +29,6 @@ _LOGGER = get_logger("mqtt_server")
 _LOGGER_MESSAGES = get_logger("mqtt_messages")
 
 
-def _ensure_broker_plugin_entrypoint() -> None:
-    """
-    Ensure the 'bumper' broker plugin is discoverable by amqtt via entry-points.
-
-    amqtt loads broker plugins from the entry-point group: 'amqtt.broker.plugins'
-    Name must match what you put in config['auth']['plugins'] (here: 'bumper').
-    """
-    try:
-        eps = entry_points(group="amqtt.broker.plugins")
-    except TypeError:
-        # Very old importlib.metadata API fallback (unlikely on Py3.12, but safe)
-        eps = entry_points().get("amqtt.broker.plugins", [])  # type: ignore[assignment]
-
-    if not any(ep.name == "bumper" for ep in eps):
-        raise RuntimeError(
-            "Bumper MQTT plugin entry-point not found.\n"
-            "You must register it in your package metadata (pyproject.toml/setup.cfg), e.g.:\n"
-            "[project.entry-points.\"amqtt.broker.plugins\"]\n"
-            "bumper = \"bumper.mqtt.server:BumperMQTTServerPlugin\"\n"
-        )
-
-
 class MQTTServer:
     """Mqtt server."""
 
@@ -59,17 +37,12 @@ class MQTTServer:
             self._host = host
             self._port = port
 
-            # For file auth, set user:hash in passwd file see
-            # (https://hbmqtt.readthedocs.io/en/latest/references/hbmqtt.html#configuration-example)
             passwd_file = kwargs.get(
                 "password_file", os.path.join(os.path.join(bumper.data_dir, "passwd"))
             )
             allow_anon = kwargs.get("allow_anonymous", False)
 
-            # Clean approach: rely on proper package entry-point registration
-            _ensure_broker_plugin_entrypoint()
-
-            # Initialize bot server
+            # Config "moderno" plugin: niente pkg_resources/entrypoints
             config = {
                 "listeners": {
                     "default": {"type": "tcp"},
@@ -84,15 +57,21 @@ class MQTTServer:
                     },
                 },
                 "sys_interval": 0,
+
+                # Manteniamo questa sezione perché il plugin la legge per passwd-file / allow-anonymous
                 "auth": {
                     "allow-anonymous": allow_anon,
                     "password-file": passwd_file,
-                    "plugins": [
-                        "bumper"
-                    ],  # must match entry-point name in 'amqtt.broker.plugins'
                 },
+
+                # Registrazione plugin "pulita"
+                "plugins": {
+                    "bumper.mqtt.server.BumperMQTTServerPlugin": {},
+                },
+
+                # Se ti serve ancora come workaround per topic-check puoi lasciarlo
                 "topic-check": {
-                    "enabled": True,  # Workaround until https://github.com/Yakifo/amqtt/pull/93 is merged
+                    "enabled": True,
                     "plugins": [],
                 },
             }
@@ -104,7 +83,7 @@ class MQTTServer:
             raise
 
     @property
-    def state(self) -> amqtt.broker.Broker.states:
+    def state(self) -> Broker.states:  # type: ignore[name-defined]
         """Return the state of the broker."""
         return self._broker.transitions.state
 
@@ -132,32 +111,22 @@ class MQTTServer:
 
 
 def _log__helperbot_message(custom_log_message: str, topic: str, data: str) -> None:
-    _LOGGER_MESSAGES.debug(
-        "%s - Topic: %s - Message: %s", custom_log_message, topic, data
-    )
+    _LOGGER_MESSAGES.debug("%s - Topic: %s - Message: %s", custom_log_message, topic, data)
 
 
-class BumperMQTTServerPlugin:
-    """MQTT Server plugin which handles the authentication."""
+class BumperMQTTServerPlugin(BaseAuthPlugin):
+    """MQTT Server auth plugin which handles the authentication."""
 
     def __init__(self, context: BrokerContext) -> None:
+        super().__init__(context)
         self._proxy_clients: dict[str, ProxyClient] = {}
         self.context = context
-        try:
-            self.auth_config = self.context.config["auth"]
-            self._users = self._read_password_file()
 
-        except KeyError:
-            self.context.logger.warning(
-                "'bumper' section not found in context configuration"
-            )
-        except Exception:
-            _LOGGER.exception(
-                "An exception occurred during plugin initialization", exc_info=True
-            )
-            raise
+        # In config moderno, auth sta in context.config["auth"]
+        self.auth_config = self.context.config.get("auth", {})
+        self._users = self._read_password_file()
 
-    async def authenticate(self, session: Session, **kwargs: dict[str, Any]) -> bool:
+    async def authenticate(self, *, session: Session) -> bool | None:
         """Authenticate session."""
         username = session.username
         password = session.password
@@ -172,7 +141,6 @@ class BumperMQTTServerPlugin:
                 client_id_split = str(client_id).split("@")
                 client_details_split = client_id_split[1].split("/")
                 if "ecouser" not in client_id_split[1]:
-                    # if ecouser aren't in details it is a bot
                     bot_add(
                         username,
                         client_id_split[0],
@@ -217,26 +185,24 @@ class BumperMQTTServerPlugin:
 
             # Check for File Auth
             if username:
-                # If there is a username and it isn't already authenticated
                 password_hash = self._users.get(username, None)
                 message_suffix = f"- Username: {username} - ClientID: {client_id}"
-                if password_hash:  # If there is a matching entry in passwd, check hash
+                if password_hash:
                     if pwd_context.verify(password, password_hash):
                         _LOGGER.info("File Authentication Success %s", message_suffix)
                         return True
-
                     _LOGGER.info("File Authentication Failed %s", message_suffix)
                 else:
-                    _LOGGER.info(
-                        "File Authentication Failed - No Entry %s", message_suffix
-                    )
+                    _LOGGER.info("File Authentication Failed - No Entry %s", message_suffix)
 
         except Exception:  # pylint: disable=broad-except
-            _LOGGER.exception("Session: %s", kwargs.get("session", ""), exc_info=True)
+            _LOGGER.exception("Session auth exception", exc_info=True)
 
-        # Check for allow anonymous
+        # allow anonymous?
         if self.auth_config.get("allow-anonymous", True):
-            message = f"Anonymous Authentication Success: config allows anonymous - Username: {username}"
+            message = (
+                f"Anonymous Authentication Success: config allows anonymous - Username: {username}"
+            )
             self.context.logger.debug(message)
             _LOGGER.info(message)
             return True
@@ -249,30 +215,19 @@ class BumperMQTTServerPlugin:
         if password_file:
             try:
                 with open(password_file, encoding="utf-8") as file:
-                    self.context.logger.debug(
-                        f"Reading user database from {password_file}"
-                    )
+                    self.context.logger.debug(f"Reading user database from {password_file}")
                     for line in file:
                         line = line.strip()
-                        if not line.startswith("#"):  # Allow comments in files
+                        if not line.startswith("#"):
                             (username, pwd_hash) = line.split(sep=":", maxsplit=3)
                             if username:
                                 users[username] = pwd_hash
-                                self.context.logger.debug(
-                                    f"user: {username} - hash: {pwd_hash}"
-                                )
-                self.context.logger.debug(
-                    f"{(len(users))} user(s) read from file {password_file}"
-                )
+                self.context.logger.debug(f"{len(users)} user(s) read from file {password_file}")
             except FileNotFoundError:
                 self.context.logger.warning(f"Password file {password_file} not found")
-
         return users
 
-    async def on_broker_client_subscribed(
-        self, client_id: str, topic: str, qos: QOS_0 | QOS_1 | QOS_2
-    ) -> None:
-        """Is called when a client subscribes on the broker."""
+    async def on_broker_client_subscribed(self, *, client_id: str, topic: str, qos: QOS_0 | QOS_1 | QOS_2) -> None:
         if bumper.bumper_proxy_mqtt:
             if client_id in self._proxy_clients:
                 await self._proxy_clients[client_id].subscribe(topic, qos)
@@ -288,9 +243,13 @@ class BumperMQTTServerPlugin:
                     topic,
                 )
 
-    async def on_broker_client_connected(self, client_id: str) -> None:
-        """On client connected."""
+    async def on_broker_client_connected(self, *, client_id: str, client_session: Session | None = None) -> None:
         self._set_client_connected(client_id, True)
+
+    async def on_broker_client_disconnected(self, *, client_id: str, client_session: Session | None = None) -> None:
+        if bumper.bumper_proxy_mqtt and client_id in self._proxy_clients:
+            await self._proxy_clients.pop(client_id).disconnect()
+        self._set_client_connected(client_id, False)
 
     def _set_client_connected(self, client_id: str, connected: bool) -> None:
         didsplit = str(client_id).split("@")
@@ -305,71 +264,41 @@ class BumperMQTTServerPlugin:
         if client:
             client_set_mqtt(client["resource"], connected)
 
-    async def on_broker_message_received(
-        self, message: IncomingApplicationMessage, client_id: str
-    ) -> None:
-        """On message received."""
+    async def on_broker_message_received(self, *, message: IncomingApplicationMessage, client_id: str) -> None:
         topic = message.topic
         topic_split = str(topic).split("/")
         data_decoded = str(message.data.decode("utf-8"))
 
-        if topic_split[6] == "helperbot":
+        if len(topic_split) > 6 and topic_split[6] == "helperbot":
             _log__helperbot_message("Received Response", topic, data_decoded)
-        elif topic_split[3] == "helperbot":
+        elif len(topic_split) > 3 and topic_split[3] == "helperbot":
             _log__helperbot_message("Send Command", topic, data_decoded)
-        elif topic_split[1] == "atr":
+        elif len(topic_split) > 1 and topic_split[1] == "atr":
             _log__helperbot_message("Received Broadcast", topic, data_decoded)
         else:
             _log__helperbot_message("Received Message", topic, data_decoded)
 
         if bumper.bumper_proxy_mqtt and client_id in self._proxy_clients:
-            if not topic_split[3] == "proxyhelper":
-                if topic_split[6] == "proxyhelper":
+            if not (len(topic_split) > 3 and topic_split[3] == "proxyhelper"):
+                if len(topic_split) > 6 and topic_split[6] == "proxyhelper":
                     ttopic = message.topic.split("/")
                     ttopic[6] = self._proxy_clients[client_id].request_mapper.pop(
                         ttopic[10], ""
                     )
                     if ttopic[6] == "":
                         _LOGGER_PROXY.warning(
-                            "Request mapper is missing entry, probably request took to"
-                            " long... Client_id: %s - Request_id: %s",
+                            "Request mapper missing entry; request probably timed out. Client_id: %s - Request_id: %s",
                             client_id,
                             ttopic[10],
                         )
                         return
-
                     ttopic_join = "/".join(ttopic)
-                    _LOGGER_PROXY.info(
-                        "Bot Message Converted Topic From %s TO %s with message: %s",
-                        message.topic,
-                        ttopic_join,
-                        data_decoded,
-                    )
                 else:
                     ttopic_join = message.topic
-                    _LOGGER_PROXY.info(
-                        "Bot Message From %s with message: %s",
-                        ttopic_join,
-                        data_decoded,
-                    )
 
                 try:
-                    _LOGGER_PROXY.info(
-                        "Proxy Forward Message to Ecovacs - Topic: %s - Message: %s",
-                        ttopic_join,
-                        data_decoded,
-                    )
                     await self._proxy_clients[client_id].publish(
                         ttopic_join, data_decoded.encode(), message.qos
                     )
-                except Exception:  # pylint: disable=broad-except
-                    _LOGGER_PROXY.error(
-                        "Forwarding to Ecovacs - Exception",
-                        exc_info=True,
-                    )
-
-    async def on_broker_client_disconnected(self, client_id: str) -> None:
-        """On client disconnect."""
-        if bumper.bumper_proxy_mqtt and client_id in self._proxy_clients:
-            await self._proxy_clients.pop(client_id).disconnect()
-        self._set_client_connected(client_id, False)
+                except Exception:
+                    _LOGGER_PROXY.error("Forwarding to Ecovacs - Exception", exc_info=True)
