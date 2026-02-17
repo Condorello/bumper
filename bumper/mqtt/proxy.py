@@ -13,18 +13,27 @@ from amqtt.adapters import (
     WebSocketsReader,
     WebSocketsWriter,
 )
+
 from amqtt.client import MQTTClient
-from amqtt.errors import ConnectError
+
+# ConnectException: nome variabile tra versioni di amqtt
+try:
+    from amqtt.client import ConnectException
+except ImportError:
+    try:
+        from amqtt.errors import ConnectError as ConnectException
+    except ImportError:
+        from amqtt.errors import AMQTTException as ConnectException  # ultima spiaggia
+
 from amqtt.mqtt.connack import CONNECTION_ACCEPTED
 from amqtt.mqtt.constants import QOS_0, QOS_1, QOS_2
 from amqtt.mqtt.protocol.client_handler import ClientProtocolHandler
 
-# compat: alcuni rami/vecchie versioni avevano ProtocolHandlerException,
-# nelle nuove è ProtocolHandlerError
+# ProtocolHandlerException: rinominata in alcune versioni
 try:
-    from amqtt.errors import ProtocolHandlerError as _ProtocolHandlerError
-except Exception:  # pragma: no cover
-    _ProtocolHandlerError = Exception  # type: ignore[assignment]
+    from amqtt.mqtt.protocol.handler import ProtocolHandlerException
+except ImportError:
+    from amqtt.mqtt.protocol.handler import ProtocolHandlerError as ProtocolHandlerException
 
 from cachetools import TTLCache
 from websockets.exceptions import InvalidHandshake, InvalidURI
