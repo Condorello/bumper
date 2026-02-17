@@ -16,34 +16,33 @@ from amqtt.adapters import (
 
 from amqtt.client import MQTTClient
 
-# ConnectException: nome variabile tra versioni di amqtt
+# ConnectException: cambia nome tra versioni di amqtt
 try:
     from amqtt.client import ConnectException
 except ImportError:
     try:
         from amqtt.errors import ConnectError as ConnectException
     except ImportError:
-        from amqtt.errors import AMQTTException as ConnectException  # ultima spiaggia
+        from amqtt.errors import AMQTTException as ConnectException  # fallback estremo
 
-from amqtt.mqtt.connack import CONNECTION_ACCEPTED
-from amqtt.mqtt.constants import QOS_0, QOS_1, QOS_2
-from amqtt.mqtt.protocol.client_handler import ClientProtocolHandler
-
-# Compat: in alcune versioni è ProtocolHandlerException, in altre ProtocolHandlerError
+# ProtocolHandlerException: rinominata in alcune versioni
 try:
     from amqtt.mqtt.protocol.handler import ProtocolHandlerException
 except ImportError:
     from amqtt.mqtt.protocol.handler import ProtocolHandlerError as ProtocolHandlerException
 
+from amqtt.mqtt.connack import CONNECTION_ACCEPTED
+from amqtt.mqtt.constants import QOS_0, QOS_1, QOS_2
+from amqtt.mqtt.protocol.client_handler import ClientProtocolHandler
 
 from cachetools import TTLCache
 from websockets.exceptions import InvalidHandshake, InvalidURI
 
 import bumper
-
 from ..util import get_logger
 
 _LOGGER = get_logger("mqtt_proxy")
+
 
 # iot/p2p/[command]]/[sender did]/[sender class]]/[sender resource]
 # /[receiver did]/[receiver class]]/[receiver resource]/[q|p/[request id/j
