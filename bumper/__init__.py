@@ -165,7 +165,6 @@ async def shutdown() -> None:
 
     bumperlog.info("Shutting down")
 
-    # Helper: recupera oggetti globali senza NameError se non inizializzati
     mh = globals().get("mqtt_helperbot", None)
     ws = globals().get("web_server", None)
     ms = globals().get("mqtt_server", None)
