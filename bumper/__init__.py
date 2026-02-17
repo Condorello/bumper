@@ -159,30 +159,52 @@ async def maintenance() -> None:
 
 
 async def shutdown() -> None:
-    """Shutdown bumper."""
+    """Shutdown bumper (safe even if startup failed midway)."""
+    global shutting_down
+    shutting_down = True
+
+    bumperlog.info("Shutting down")
+
+    # Helper: recupera oggetti globali senza NameError se non inizializzati
+    mh = globals().get("mqtt_helperbot", None)
+    ws = globals().get("web_server", None)
+    ms = globals().get("mqtt_server", None)
+    xs = globals().get("xmpp_server", None)
+
+    # 1) MQTT helperbot
     try:
-        bumperlog.info("Shutting down")
-        global shutting_down
-        shutting_down = True
+        if mh is not None:
+            await mh.disconnect()
+    except Exception:
+        bumperlog.exception("Error while disconnecting mqtt_helperbot")
 
-        global mqtt_helperbot
-        await mqtt_helperbot.disconnect()
-        global web_server
-        await web_server.shutdown()
-        global mqtt_server
-        while mqtt_server.state == "starting":
-            await asyncio.sleep(0.1)
-        if mqtt_server.state == "started":
-            await mqtt_server.shutdown()
-        global xmpp_server
-        if xmpp_server.server:
-            if xmpp_server.server.is_serving:
-                xmpp_server.server.close()
-            await xmpp_server.server.wait_closed()
+    # 2) Web server
+    try:
+        if ws is not None:
+            await ws.shutdown()
+    except Exception:
+        bumperlog.exception("Error while shutting down web_server")
 
-        bumperlog.info("Shutdown complete")
-    except asyncio.CancelledError:
-        bumperlog.info("Coroutine canceled")
+    # 3) MQTT server
+    try:
+        if ms is not None:
+            while getattr(ms, "state", None) == "starting":
+                await asyncio.sleep(0.1)
+            if getattr(ms, "state", None) == "started":
+                await ms.shutdown()
+    except Exception:
+        bumperlog.exception("Error while shutting down mqtt_server")
+
+    # 4) XMPP server
+    try:
+        if xs is not None and getattr(xs, "server", None):
+            if xs.server.is_serving:
+                xs.server.close()
+            await xs.server.wait_closed()
+    except Exception:
+        bumperlog.exception("Error while shutting down xmpp_server")
+
+    bumperlog.info("Shutdown complete")
 
 
 def main(argv: None | list[str] = None) -> None:
