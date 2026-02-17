@@ -29,11 +29,12 @@ from amqtt.mqtt.connack import CONNECTION_ACCEPTED
 from amqtt.mqtt.constants import QOS_0, QOS_1, QOS_2
 from amqtt.mqtt.protocol.client_handler import ClientProtocolHandler
 
-# ProtocolHandlerException: rinominata in alcune versioni
+# Compat: in alcune versioni è ProtocolHandlerException, in altre ProtocolHandlerError
 try:
     from amqtt.mqtt.protocol.handler import ProtocolHandlerException
 except ImportError:
     from amqtt.mqtt.protocol.handler import ProtocolHandlerError as ProtocolHandlerException
+
 
 from cachetools import TTLCache
 from websockets.exceptions import InvalidHandshake, InvalidURI
