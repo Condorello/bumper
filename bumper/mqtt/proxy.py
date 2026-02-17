@@ -1,4 +1,3 @@
-raise RuntimeError("PROXY.PY UPDATED - TEST2")
 """Mqtt proxy module."""
 import asyncio
 import ssl
@@ -29,12 +28,6 @@ except ImportError:  # amqtt "nuovo"
 from amqtt.mqtt.connack import CONNECTION_ACCEPTED
 from amqtt.mqtt.constants import QOS_0, QOS_1, QOS_2
 from amqtt.mqtt.protocol.client_handler import ClientProtocolHandler
-
-# ProtocolHandlerException: rinominata in alcune versioni
-try:
-    from amqtt.mqtt.protocol.handler import ProtocolHandlerException
-except ImportError:
-    from amqtt.mqtt.protocol.handler import ProtocolHandlerError as ProtocolHandlerException
 
 from cachetools import TTLCache
 from websockets.exceptions import InvalidHandshake, InvalidURI
@@ -212,7 +205,7 @@ class _NoCertVerifyClient(MQTTClient):  # type:ignore[misc]
             if return_code is not CONNECTION_ACCEPTED:
                 self.session.transitions.disconnect()
                 self.logger.warning("Connection rejected with code '%s'", return_code)
-                raise ConnectError("Connection rejected by broker")
+                raise ConnectException("Connection rejected by broker")
 
             await self._handler.start()
             self.session.transitions.connect()
@@ -225,16 +218,22 @@ class _NoCertVerifyClient(MQTTClient):  # type:ignore[misc]
             return return_code
 
         except InvalidURI as iuri:
-            self.logger.warning("connection failed: invalid URI '%s'", self.session.broker_uri)
+            self.logger.warning(
+                "connection failed: invalid URI '%s'", self.session.broker_uri
+            )
             self.session.transitions.disconnect()
-            raise ConnectError(f"connection failed: invalid URI '{self.session.broker_uri}'") from iuri
+            raise ConnectException(
+                f"connection failed: invalid URI '{self.session.broker_uri}'"
+            ) from iuri
 
         except InvalidHandshake as ihs:
             self.logger.warning("connection failed: invalid websocket handshake")
             self.session.transitions.disconnect()
-            raise ConnectError("connection failed: invalid websocket handshake") from ihs
+            raise ConnectException(
+                "connection failed: invalid websocket handshake"
+            ) from ihs
 
-        except (_ProtocolHandlerError, ConnectionError, OSError) as e:
+        except (ConnectionError, OSError) as e:
             self.logger.warning("MQTT connection failed: %r", e)
             self.session.transitions.disconnect()
-            raise ConnectError(str(e)) from e
+            raise ConnectException(str(e)) from e
