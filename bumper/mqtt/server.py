@@ -1,10 +1,10 @@
 """Server module."""
 import os
 from typing import Any
+from importlib.metadata import entry_points
 
 import amqtt
-import pkg_resources
-from amqtt.broker import Broker, BrokerContext
+from amqtt.broker import BrokerContext
 from amqtt.mqtt.constants import QOS_0, QOS_1, QOS_2
 from amqtt.session import IncomingApplicationMessage, Session
 from passlib.apps import custom_app_context as pwd_context
@@ -29,6 +29,28 @@ _LOGGER = get_logger("mqtt_server")
 _LOGGER_MESSAGES = get_logger("mqtt_messages")
 
 
+def _ensure_broker_plugin_entrypoint() -> None:
+    """
+    Ensure the 'bumper' broker plugin is discoverable by amqtt via entry-points.
+
+    amqtt loads broker plugins from the entry-point group: 'amqtt.broker.plugins'
+    Name must match what you put in config['auth']['plugins'] (here: 'bumper').
+    """
+    try:
+        eps = entry_points(group="amqtt.broker.plugins")
+    except TypeError:
+        # Very old importlib.metadata API fallback (unlikely on Py3.12, but safe)
+        eps = entry_points().get("amqtt.broker.plugins", [])  # type: ignore[assignment]
+
+    if not any(ep.name == "bumper" for ep in eps):
+        raise RuntimeError(
+            "Bumper MQTT plugin entry-point not found.\n"
+            "You must register it in your package metadata (pyproject.toml/setup.cfg), e.g.:\n"
+            "[project.entry-points.\"amqtt.broker.plugins\"]\n"
+            "bumper = \"bumper.mqtt.server:BumperMQTTServerPlugin\"\n"
+        )
+
+
 class MQTTServer:
     """Mqtt server."""
 
@@ -44,13 +66,8 @@ class MQTTServer:
             )
             allow_anon = kwargs.get("allow_anonymous", False)
 
-            # The below adds a plugin to the amqtt.broker.plugins without having to futz with setup.py
-            distribution = pkg_resources.Distribution("amqtt.broker.plugins")
-            bumper_plugin = pkg_resources.EntryPoint.parse(
-                "bumper = bumper.mqtt.server:BumperMQTTServerPlugin", dist=distribution
-            )
-            distribution._ep_map = {"amqtt.broker.plugins": {"bumper": bumper_plugin}}  # type: ignore[attr-defined]
-            pkg_resources.working_set.add(distribution)
+            # Clean approach: rely on proper package entry-point registration
+            _ensure_broker_plugin_entrypoint()
 
             # Initialize bot server
             config = {
@@ -64,7 +81,7 @@ class MQTTServer:
                     },
                     "tcp-insecure": {
                         "bind": f"{host}:1883",
-                    }
+                    },
                 },
                 "sys_interval": 0,
                 "auth": {
@@ -72,7 +89,7 @@ class MQTTServer:
                     "password-file": passwd_file,
                     "plugins": [
                         "bumper"
-                    ],  # Bumper plugin provides auth and handling of bots/clients connecting
+                    ],  # must match entry-point name in 'amqtt.broker.plugins'
                 },
                 "topic-check": {
                     "enabled": True,  # Workaround until https://github.com/Yakifo/amqtt/pull/93 is merged
@@ -87,7 +104,7 @@ class MQTTServer:
             raise
 
     @property
-    def state(self) -> Broker.states:
+    def state(self) -> amqtt.broker.Broker.states:
         """Return the state of the broker."""
         return self._broker.transitions.state
 
@@ -109,10 +126,7 @@ class MQTTServer:
     async def shutdown(self) -> None:
         """Shutdown server."""
         # stop session handler manually otherwise connection will not be closed correctly
-        for (
-            _,
-            handler,
-        ) in self._broker._sessions.values():  # pylint: disable=protected-access
+        for (_, handler) in self._broker._sessions.values():  # pylint: disable=protected-access
             await handler.stop()
         await self._broker.shutdown()
 
@@ -259,9 +273,7 @@ class BumperMQTTServerPlugin:
         self, client_id: str, topic: str, qos: QOS_0 | QOS_1 | QOS_2
     ) -> None:
         """Is called when a client subscribes on the broker."""
-
         if bumper.bumper_proxy_mqtt:
-            # if proxy mode, also subscribe on ecovacs server
             if client_id in self._proxy_clients:
                 await self._proxy_clients[client_id].subscribe(topic, qos)
                 _LOGGER_PROXY.info(
@@ -302,20 +314,16 @@ class BumperMQTTServerPlugin:
         data_decoded = str(message.data.decode("utf-8"))
 
         if topic_split[6] == "helperbot":
-            # Response to command
             _log__helperbot_message("Received Response", topic, data_decoded)
         elif topic_split[3] == "helperbot":
-            # Helperbot sending command
             _log__helperbot_message("Send Command", topic, data_decoded)
         elif topic_split[1] == "atr":
-            # Broadcast message received on atr
             _log__helperbot_message("Received Broadcast", topic, data_decoded)
         else:
             _log__helperbot_message("Received Message", topic, data_decoded)
 
         if bumper.bumper_proxy_mqtt and client_id in self._proxy_clients:
             if not topic_split[3] == "proxyhelper":
-                # if from proxyhelper, don't send back to ecovacs...yet
                 if topic_split[6] == "proxyhelper":
                     ttopic = message.topic.split("/")
                     ttopic[6] = self._proxy_clients[client_id].request_mapper.pop(
@@ -346,7 +354,6 @@ class BumperMQTTServerPlugin:
                     )
 
                 try:
-                    # Send back to ecovacs
                     _LOGGER_PROXY.info(
                         "Proxy Forward Message to Ecovacs - Topic: %s - Message: %s",
                         ttopic_join,
