@@ -1,5 +1,6 @@
 """Server module."""
 from __future__ import annotations
+
 import os
 from typing import Any
 
@@ -84,7 +85,7 @@ class MQTTServer:
             raise
 
     @property
-    def state(self) -> Broker.states:  # type: ignore[name-defined]
+    def state(self) -> Any:
         """Return the state of the broker."""
         return self._broker.transitions.state
 
@@ -112,7 +113,9 @@ class MQTTServer:
 
 
 def _log__helperbot_message(custom_log_message: str, topic: str, data: str) -> None:
-    _LOGGER_MESSAGES.debug("%s - Topic: %s - Message: %s", custom_log_message, topic, data)
+    _LOGGER_MESSAGES.debug(
+        "%s - Topic: %s - Message: %s", custom_log_message, topic, data
+    )
 
 
 class BumperMQTTServerPlugin(BaseAuthPlugin):
@@ -228,7 +231,9 @@ class BumperMQTTServerPlugin(BaseAuthPlugin):
                 self.context.logger.warning(f"Password file {password_file} not found")
         return users
 
-    async def on_broker_client_subscribed(self, *, client_id: str, topic: str, qos: QOS_0 | QOS_1 | QOS_2) -> None:
+    async def on_broker_client_subscribed(
+        self, *, client_id: str, topic: str, qos: QOS_0 | QOS_1 | QOS_2
+    ) -> None:
         if bumper.bumper_proxy_mqtt:
             if client_id in self._proxy_clients:
                 await self._proxy_clients[client_id].subscribe(topic, qos)
@@ -244,10 +249,14 @@ class BumperMQTTServerPlugin(BaseAuthPlugin):
                     topic,
                 )
 
-    async def on_broker_client_connected(self, *, client_id: str, client_session: Session | None = None) -> None:
+    async def on_broker_client_connected(
+        self, *, client_id: str, client_session: Session | None = None
+    ) -> None:
         self._set_client_connected(client_id, True)
 
-    async def on_broker_client_disconnected(self, *, client_id: str, client_session: Session | None = None) -> None:
+    async def on_broker_client_disconnected(
+        self, *, client_id: str, client_session: Session | None = None
+    ) -> None:
         if bumper.bumper_proxy_mqtt and client_id in self._proxy_clients:
             await self._proxy_clients.pop(client_id).disconnect()
         self._set_client_connected(client_id, False)
@@ -265,7 +274,9 @@ class BumperMQTTServerPlugin(BaseAuthPlugin):
         if client:
             client_set_mqtt(client["resource"], connected)
 
-    async def on_broker_message_received(self, *, message: IncomingApplicationMessage, client_id: str) -> None:
+    async def on_broker_message_received(
+        self, *, message: IncomingApplicationMessage, client_id: str
+    ) -> None:
         topic = message.topic
         topic_split = str(topic).split("/")
         data_decoded = str(message.data.decode("utf-8"))
