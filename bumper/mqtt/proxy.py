@@ -1,5 +1,4 @@
-raise RuntimeError("PROXY.PY UPDATED - TEST")
-
+raise RuntimeError("PROXY.PY UPDATED - TEST2")
 """Mqtt proxy module."""
 import asyncio
 import ssl
@@ -20,22 +19,22 @@ from amqtt.client import MQTTClient
 
 # ConnectException: cambia nome tra versioni di amqtt
 try:
-    from amqtt.client import ConnectException
-except ImportError:
+    from amqtt.client import ConnectException  # amqtt "vecchio"
+except ImportError:  # amqtt "nuovo"
     try:
         from amqtt.errors import ConnectError as ConnectException
-    except ImportError:
-        from amqtt.errors import AMQTTException as ConnectException  # fallback estremo
+    except ImportError:  # ultima spiaggia
+        from amqtt.errors import AMQTTException as ConnectException
+
+from amqtt.mqtt.connack import CONNECTION_ACCEPTED
+from amqtt.mqtt.constants import QOS_0, QOS_1, QOS_2
+from amqtt.mqtt.protocol.client_handler import ClientProtocolHandler
 
 # ProtocolHandlerException: rinominata in alcune versioni
 try:
     from amqtt.mqtt.protocol.handler import ProtocolHandlerException
 except ImportError:
     from amqtt.mqtt.protocol.handler import ProtocolHandlerError as ProtocolHandlerException
-
-from amqtt.mqtt.connack import CONNECTION_ACCEPTED
-from amqtt.mqtt.constants import QOS_0, QOS_1, QOS_2
-from amqtt.mqtt.protocol.client_handler import ClientProtocolHandler
 
 from cachetools import TTLCache
 from websockets.exceptions import InvalidHandshake, InvalidURI
@@ -44,7 +43,6 @@ import bumper
 from ..util import get_logger
 
 _LOGGER = get_logger("mqtt_proxy")
-
 
 # iot/p2p/[command]]/[sender did]/[sender class]]/[sender resource]
 # /[receiver did]/[receiver class]]/[receiver resource]/[q|p/[request id/j
