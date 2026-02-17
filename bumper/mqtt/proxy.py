@@ -1,3 +1,5 @@
+raise RuntimeError("PROXY.PY UPDATED - TEST")
+
 """Mqtt proxy module."""
 import asyncio
 import ssl
