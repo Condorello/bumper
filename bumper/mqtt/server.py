@@ -59,18 +59,15 @@ class MQTTServer:
                     },
                 },
                 "sys_interval": 0,
-
                 # Manteniamo questa sezione perché il plugin la legge per passwd-file / allow-anonymous
                 "auth": {
                     "allow-anonymous": allow_anon,
                     "password-file": passwd_file,
                 },
-
                 # Registrazione plugin "pulita"
                 "plugins": {
                     "bumper.mqtt.server.BumperMQTTServerPlugin": {},
                 },
-
                 # Se ti serve ancora come workaround per topic-check puoi lasciarlo
                 "topic-check": {
                     "enabled": True,
@@ -126,8 +123,55 @@ class BumperMQTTServerPlugin(BaseAuthPlugin):
         self._proxy_clients: dict[str, ProxyClient] = {}
         self.context = context
 
-        # In config moderno, auth sta in context.config["auth"]
-        self.auth_config = self.context.config.get("auth", {})
+        cfg_obj = getattr(self.context, "config", None)
+
+        def _cfg_to_dict(obj: Any) -> dict[str, Any]:
+            """Best-effort conversion of config objects to dict."""
+            if obj is None:
+                return {}
+            if isinstance(obj, dict):
+                return obj
+            # pydantic v2
+            if hasattr(obj, "model_dump"):
+                try:
+                    d = obj.model_dump()
+                    return d if isinstance(d, dict) else {}
+                except Exception:
+                    return {}
+            # pydantic v1
+            if hasattr(obj, "dict"):
+                try:
+                    d = obj.dict()
+                    return d if isinstance(d, dict) else {}
+                except Exception:
+                    return {}
+            if hasattr(obj, "to_dict"):
+                try:
+                    d = obj.to_dict()
+                    return d if isinstance(d, dict) else {}
+                except Exception:
+                    return {}
+            if hasattr(obj, "__dict__"):
+                try:
+                    d = obj.__dict__
+                    return d if isinstance(d, dict) else {}
+                except Exception:
+                    return {}
+            return {}
+
+        def _cfg_get(key: str, default: Any) -> Any:
+            """Get a key from context.config supporting both dict and object configs."""
+            if cfg_obj is None:
+                return default
+            if hasattr(cfg_obj, "get"):
+                try:
+                    return cfg_obj.get(key, default)  # type: ignore[call-arg]
+                except Exception:
+                    return default
+            return _cfg_to_dict(cfg_obj).get(key, default)
+
+        # In config moderno, auth sta in context.config["auth"] (dict oppure oggetto)
+        self.auth_config: dict[str, Any] = _cfg_get("auth", {}) or {}
         self._users = self._read_password_file()
 
     async def authenticate(self, *, session: Session) -> bool | None:
@@ -203,7 +247,11 @@ class BumperMQTTServerPlugin(BaseAuthPlugin):
             _LOGGER.exception("Session auth exception", exc_info=True)
 
         # allow anonymous?
-        if self.auth_config.get("allow-anonymous", True):
+        allow_anon = self.auth_config.get("allow-anonymous", True)
+        if isinstance(allow_anon, str):
+            allow_anon = allow_anon.strip().lower() in ("1", "true", "yes", "on")
+
+        if allow_anon:
             message = (
                 f"Anonymous Authentication Success: config allows anonymous - Username: {username}"
             )
