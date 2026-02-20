@@ -47,7 +47,7 @@ class MQTTServer:
             # Config "moderno" plugin: niente pkg_resources/entrypoints
             config = {
                 "listeners": {
-                    "tcp-tsl": {
+                    "default": {
                         "type": "tcp",
                         "bind": f"{host}:{port}",
                         "ssl": True,
