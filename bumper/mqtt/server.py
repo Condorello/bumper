@@ -50,7 +50,7 @@ class MQTTServer:
                     "default": {"type": "tcp"},
                     "tcp-tsl": {
                         "bind": f"{host}:{port}",
-                        "ssl": "True",
+                        "ssl": True,
                         "certfile": bumper.server_cert,
                         "keyfile": bumper.server_key,
                     },
